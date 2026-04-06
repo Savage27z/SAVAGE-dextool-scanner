@@ -19,6 +19,7 @@ from config import (
     NATIVE_SYMBOL,
     SCAN_INTERVAL,
     SLIPPAGE,
+    STOP_LOSS,
     TAKE_PROFIT,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
@@ -293,6 +294,7 @@ async def cmd_config(update, context):
         f"Chain: {CHAIN}\n"
         f"Buy Percent: {BUY_PERCENT}%\n"
         f"Take Profit: {TAKE_PROFIT}%\n"
+        f"Stop Loss: {STOP_LOSS}%\n"
         f"Slippage: {SLIPPAGE}%\n"
         f"Min Liquidity: ${MIN_LIQUIDITY:,}\n"
         f"Market Cap Range: ${MIN_MCAP:,} – ${MAX_MCAP:,}\n"

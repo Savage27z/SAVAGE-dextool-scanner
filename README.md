@@ -53,6 +53,7 @@ Edit `.env` with your values:
 | `CHAIN` | Active chain: `SOL`, `ETH`, or `BSC` | `SOL` |
 | `BUY_PERCENT` | % of wallet balance to use per trade | `50` |
 | `TAKE_PROFIT` | ROI % target to trigger sell | `20` |
+| `STOP_LOSS` | ROI % to trigger stop-loss sell (negative, e.g. -30) | `-30` |
 | `SLIPPAGE` | Slippage tolerance % | `15` |
 | `MIN_LIQUIDITY` | Minimum pool liquidity in USD | `5000` |
 | `MIN_MCAP` | Minimum market cap in USD | `10000` |
