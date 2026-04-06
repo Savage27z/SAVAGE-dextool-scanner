@@ -36,6 +36,11 @@ class Notifier:
         else:
             holders_str = _fmt_int(token.get("holders", 0))
 
+        links = f"🔗 DexTools: {_esc(token.get('dextools_url', ''))}\n"
+        if source == "dexscreener":
+            links += f"🔗 DexScreener: {_esc(token.get('dex_pair_url', ''))}\n"
+        links += f"📡 Source: {_esc(source)}"
+
         msg = (
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "🔍 <b>NEW LOWCAP DETECTED</b>\n"
@@ -49,9 +54,7 @@ class Notifier:
             f"📊 24h Volume: {volume}\n"
             f"👥 Holders: {holders_str}\n"
             f"🧾 Buy Tax: {token.get('buy_tax', 0):.1f}% | Sell Tax: {token.get('sell_tax', 0):.1f}%\n"
-            f"🔗 DexTools: {_esc(token.get('dextools_url', ''))}\n"
-            f"🔗 DexScreener: {_esc(token.get('dex_pair_url', ''))}\n"
-            f"📡 Source: {_esc(source)}\n"
+            f"{links}\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚙️ Action: Buying with {buy_amount:.4f} {native_symbol}"
         )
