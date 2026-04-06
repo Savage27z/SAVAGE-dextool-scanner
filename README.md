@@ -15,6 +15,8 @@ Automated Telegram trading bot that scans DexTools for newly launched low-cap to
 - **SQLite persistence** — tracks detected tokens, open positions, and completed trades
 - **Rotating log files** — `trading.log` with automatic rotation (5 MB × 3 backups)
 - **Graceful shutdown** — handles SIGINT/SIGTERM cleanly
+- **Whale tracking** — monitors configurable whale wallets for large buys on watched tokens (Solana only)
+- **Anti-rug protection** — monitors liquidity of open positions; auto-sells immediately if liquidity drops below a floor or by a configurable percentage from entry
 
 ## Prerequisites
 
@@ -63,6 +65,12 @@ Edit `.env` with your values:
 | `SCAN_INTERVAL` | Seconds between DexTools scans | `60` |
 | `MONITOR_INTERVAL` | Seconds between position checks | `30` |
 | `MIN_SCORE` | Minimum safety score (0-100) for auto-buy | `40` |
+| `WHALE_TRACKING_ENABLED` | Enable whale/smart-money wallet tracking (Solana only) | `true` |
+| `WHALE_CHECK_INTERVAL` | Seconds between whale wallet checks | `45` |
+| `WHALE_MIN_SOL` | Minimum SOL spent by whale to trigger alert | `1.0` |
+| `ANTIRUG_ENABLED` | Enable anti-rug liquidity protection | `true` |
+| `ANTIRUG_MIN_LIQ` | Emergency sell if liquidity drops below this USD amount | `1000` |
+| `ANTIRUG_LIQ_DROP_PCT` | Emergency sell if liquidity drops by this % from entry | `70` |
 
 ## Usage
 
@@ -98,6 +106,9 @@ The bot will connect to Telegram and send a startup message. Use commands to con
 | `/adduser <id>` | Grant a friend read-only access |
 | `/removeuser <id>` | Revoke a user's access |
 | `/users` | List all authorized users |
+| `/addwhale <address> [label]` | Track a whale/smart-money wallet |
+| `/removewhale <address>` | Stop tracking a whale wallet |
+| `/whales` | List tracked whale wallets & recent events |
 
 ### Sharing with friends
 
@@ -111,28 +122,28 @@ Your friends can message the bot directly on Telegram — no GitHub or setup nee
 │   (User)      │     │  (commands)   │     │  (messages)  │
 └──────────────┘     └──────┬───────┘     └──────────────┘
                             │
-                   ┌────────┴────────┐
-                   ▼                 ▼
-            ┌────────────┐   ┌─────────────┐
-            │ scanner.py  │   │ monitor.py   │
-            │ (DexTools   │   │ (profit      │
-            │  API scan)  │   │  tracking)   │
-            └──────┬─────┘   └──────┬──────┘
-                   │                 │
-                   ▼                 ▼
-            ┌────────────────────────────┐
-            │        trader.py            │
-            │  ┌──────────┐ ┌──────────┐ │
-            │  │ Solana    │ │  EVM     │ │
-            │  │ Trader    │ │  Trader  │ │
-            │  │ (Jupiter) │ │ (Uni/PS) │ │
-            │  └──────────┘ └──────────┘ │
-            └──────────────┬─────────────┘
-                           │
-                    ┌──────┴──────┐
-                    │    db.py     │
-                    │  (SQLite)    │
-                    └─────────────┘
+                   ┌────────┼────────┐
+                   ▼        │        ▼
+            ┌────────────┐  │  ┌─────────────┐
+            │ scanner.py  │  │  │ monitor.py   │
+            │ (DexTools   │  │  │ (profit      │
+            │  API scan)  │  │  │  tracking)   │
+            └──────┬─────┘  │  └──────┬──────┘
+                   │        │         │
+                   ▼        │         ▼
+            ┌──────────┐    │  ┌────────────────────────────┐
+            │  whale_   │    │  │        trader.py            │
+            │ tracker   │◄───┘  │  ┌──────────┐ ┌──────────┐ │
+            │ (wallet   │       │  │ Solana    │ │  EVM     │ │
+            │  monitor) │       │  │ Trader    │ │  Trader  │ │
+            └──────────┘       │  │ (Jupiter) │ │ (Uni/PS) │ │
+                               │  └──────────┘ └──────────┘ │
+                               └──────────────┬─────────────┘
+                                              │
+                                       ┌──────┴──────┐
+                                       │    db.py     │
+                                       │  (SQLite)    │
+                                       └─────────────┘
 
 config.py ─── loaded by all modules (env vars + logger)
 ```
@@ -143,7 +154,8 @@ config.py ─── loaded by all modules (env vars + logger)
 2. Filters by market cap, liquidity, age, and honeypot status
 3. `trader.py` executes a buy (Jupiter swap on Solana, or Uniswap/PancakeSwap on EVM)
 4. `monitor.py` checks positions every 30s using Jupiter Price API (or on-chain quotes for EVM)
-5. When ROI hits the take-profit target, executes a sell and logs the trade
+5. Anti-rug check runs first each cycle — if liquidity drops below the floor or by the configured %, triggers an emergency sell
+6. When ROI hits the take-profit target, executes a sell and logs the trade
 
 ## File Overview
 
@@ -156,6 +168,7 @@ config.py ─── loaded by all modules (env vars + logger)
 | `monitor.py` | Background profit-monitoring loop |
 | `notifier.py` | Telegram message formatting and sending |
 | `bot.py` | Entry point — Telegram bot commands, scanner/monitor orchestration |
+| `whale_tracker.py` | Background whale wallet tracker — monitors large DEX buys |
 
 ## Disclaimer
 

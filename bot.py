@@ -25,6 +25,9 @@ from config import (
     TELEGRAM_CHAT_ID,
     TRAILING_DROP,
     TRAILING_ENABLED,
+    ANTIRUG_ENABLED,
+    ANTIRUG_MIN_LIQ,
+    ANTIRUG_LIQ_DROP_PCT,
     logger,
 )
 from monitor import ProfitMonitor, _format_duration
@@ -32,12 +35,16 @@ from notifier import Notifier
 from honeypot import check_honeypot
 from scanner import scan_all_sources
 from trader import create_trader
+from whale_tracker import WhaleTracker
+from config import WHALE_TRACKING_ENABLED, WHALE_CHECK_INTERVAL, WHALE_MIN_SOL
 
 trader = None
 monitor: ProfitMonitor | None = None
 notifier: Notifier | None = None
 scanner_task: asyncio.Task | None = None
 monitor_task: asyncio.Task | None = None
+whale_tracker: WhaleTracker | None = None
+whale_task: asyncio.Task | None = None
 is_running: bool = False
 
 
@@ -110,6 +117,7 @@ async def scanner_loop():
                             "buy_amount_native": result["amount_spent"],
                             "buy_tx_hash": result["tx_hash"],
                             "pair_address": token.get("pair_address", ""),
+                            "entry_liquidity": token.get("liquidity", 0),
                         }
                         await db.save_open_position(position)
 
@@ -156,6 +164,9 @@ async def cmd_help(update, context):
             lines.append("/adduser &lt;user_id&gt; — Grant access")
             lines.append("/removeuser &lt;user_id&gt; — Revoke access")
             lines.append("/users — List authorized users")
+            lines.append("/addwhale &lt;address&gt; [label] — Track a whale wallet")
+            lines.append("/removewhale &lt;address&gt; — Stop tracking a whale wallet")
+            lines.append("/whales — List tracked whales &amp; recent events")
     else:
         uid = update.effective_user.id
         lines.append(f"Your user ID: <code>{uid}</code>")
@@ -169,7 +180,7 @@ async def cmd_start(update, context):
         await update.message.reply_text("Admin only.")
         return
 
-    global is_running, scanner_task, monitor_task
+    global is_running, scanner_task, monitor_task, whale_task
 
     if is_running:
         await update.message.reply_text("Bot is already running.")
@@ -178,6 +189,8 @@ async def cmd_start(update, context):
     is_running = True
     scanner_task = asyncio.create_task(scanner_loop())
     monitor_task = asyncio.create_task(monitor.start())
+    if whale_tracker:
+        whale_task = asyncio.create_task(whale_tracker.start())
 
     native = NATIVE_SYMBOL.get(CHAIN.upper(), "SOL")
     if CHAIN.upper() == "SOL":
@@ -203,7 +216,7 @@ async def cmd_stop(update, context):
         await update.message.reply_text("Admin only.")
         return
 
-    global is_running, scanner_task, monitor_task
+    global is_running, scanner_task, monitor_task, whale_task
 
     if not is_running:
         await update.message.reply_text("Bot is not running.")
@@ -212,13 +225,18 @@ async def cmd_stop(update, context):
     is_running = False
     if monitor:
         await monitor.stop()
+    if whale_tracker:
+        await whale_tracker.stop()
     if scanner_task and not scanner_task.done():
         scanner_task.cancel()
     if monitor_task and not monitor_task.done():
         monitor_task.cancel()
+    if whale_task and not whale_task.done():
+        whale_task.cancel()
 
     scanner_task = None
     monitor_task = None
+    whale_task = None
 
     await update.message.reply_html("🛑 <b>Bot Stopped</b>\nScanning and trading paused. Bot still responds to commands.")
     logger.info("Bot stopped by user %s", update.effective_user.id)
@@ -306,7 +324,13 @@ async def cmd_config(update, context):
         f"Market Cap Range: ${MIN_MCAP:,} – ${MAX_MCAP:,}\n"
         f"Min Safety Score: {MIN_SCORE}/100\n"
         f"Scan Interval: {SCAN_INTERVAL}s\n"
-        f"Monitor Interval: {MONITOR_INTERVAL}s"
+        f"Monitor Interval: {MONITOR_INTERVAL}s\n"
+        f"Whale Tracking: {'Enabled' if WHALE_TRACKING_ENABLED else 'Disabled'}\n"
+        f"Whale Check Interval: {WHALE_CHECK_INTERVAL}s\n"
+        f"Whale Min SOL: {WHALE_MIN_SOL} SOL\n"
+        f"Anti-Rug: {'Enabled' if ANTIRUG_ENABLED else 'Disabled'}\n"
+        f"Anti-Rug Min Liquidity: ${ANTIRUG_MIN_LIQ:,}\n"
+        f"Anti-Rug Drop Threshold: {ANTIRUG_LIQ_DROP_PCT}%"
     )
     await update.message.reply_html(msg)
 
@@ -381,6 +405,15 @@ async def cmd_buy(update, context):
         return
 
     symbol = token_address[:8]
+
+    entry_liq = 0.0
+    try:
+        from dexscreener import get_token_liquidity
+        async with aiohttp.ClientSession() as liq_session:
+            entry_liq = await get_token_liquidity(liq_session, CHAIN, token_address)
+    except Exception:
+        pass
+
     position = {
         "token_address": token_address,
         "token_symbol": result.get("symbol", symbol),
@@ -390,6 +423,7 @@ async def cmd_buy(update, context):
         "buy_amount_native": result["amount_spent"],
         "buy_tx_hash": result["tx_hash"],
         "pair_address": "",
+        "entry_liquidity": entry_liq,
     }
     await db.save_open_position(position)
 
@@ -683,14 +717,99 @@ async def cmd_users(update, context):
     await update.message.reply_html("\n".join(lines))
 
 
+async def cmd_addwhale(update, context):
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
+        return
+
+    if not context.args:
+        await update.message.reply_html("Usage: <code>/addwhale &lt;address&gt; [label]</code>")
+        return
+
+    address = context.args[0].strip()
+
+    try:
+        import base58 as b58
+        decoded = b58.b58decode(address)
+        if len(decoded) != 32:
+            raise ValueError("not 32 bytes")
+    except Exception:
+        await update.message.reply_html(
+            f"❌ Invalid Solana address.\n<code>{address}</code> is not a valid base58-encoded 32-byte pubkey."
+        )
+        return
+
+    label = " ".join(context.args[1:]) if len(context.args) > 1 else ""
+    added = await db.add_whale_wallet(address, label)
+    if added:
+        short = address[:6] + "…" + address[-4:]
+        lbl = f" ({label})" if label else ""
+        await update.message.reply_html(f"🐋 Whale wallet added: <code>{short}</code>{lbl}")
+    else:
+        await update.message.reply_html("Wallet already tracked.")
+
+
+async def cmd_removewhale(update, context):
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
+        return
+
+    if not context.args:
+        await update.message.reply_html("Usage: <code>/removewhale &lt;address&gt;</code>")
+        return
+
+    address = context.args[0].strip()
+    removed = await db.remove_whale_wallet(address)
+    if removed:
+        short = address[:6] + "…" + address[-4:]
+        await update.message.reply_html(f"🗑 Whale wallet removed: <code>{short}</code>")
+    else:
+        await update.message.reply_html("Wallet not found in tracking list.")
+
+
+async def cmd_whales(update, context):
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
+        return
+
+    wallets = await db.get_whale_wallets()
+    events = await db.get_whale_events(limit=5)
+
+    lines = ["🐋 <b>Tracked Whale Wallets</b>\n"]
+    if wallets:
+        for w in wallets:
+            addr = w["address"]
+            short = addr[:6] + "…" + addr[-4:]
+            lbl = f" ({w['label']})" if w.get("label") else ""
+            lines.append(f"• <code>{short}</code>{lbl} — added {w.get('added_at', '?')}")
+    else:
+        lines.append("No wallets tracked. Use /addwhale to add one.")
+
+    lines.append("\n<b>Recent Whale Events</b>\n")
+    if events:
+        for e in events:
+            short_wallet = e["wallet_address"][:6] + "…" + e["wallet_address"][-4:]
+            lines.append(
+                f"• {short_wallet} bought <b>{e.get('token_symbol', '?')}</b> — "
+                f"{e['sol_spent']:.4f} SOL — {e.get('detected_at', '?')}"
+            )
+    else:
+        lines.append("No whale events recorded yet.")
+
+    await update.message.reply_html("\n".join(lines))
+
+
 async def post_init(application):
-    global trader, monitor, notifier
+    global trader, monitor, notifier, whale_tracker
 
     await db.init_db()
 
     trader = create_trader(CHAIN)
     notifier = Notifier(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
     monitor = ProfitMonitor(trader, notifier)
+
+    if CHAIN.upper() == "SOL" and WHALE_TRACKING_ENABLED:
+        whale_tracker = WhaleTracker(trader.client, notifier)
 
     native = NATIVE_SYMBOL.get(CHAIN.upper(), "SOL")
     if CHAIN.upper() == "SOL":
@@ -709,6 +828,8 @@ async def post_init(application):
 async def shutdown(application):
     global is_running
     is_running = False
+    if whale_tracker:
+        await whale_tracker.stop()
     if monitor:
         await monitor.stop()
     if trader:
@@ -740,6 +861,9 @@ def main():
     app.add_handler(CommandHandler("adduser", cmd_adduser))
     app.add_handler(CommandHandler("removeuser", cmd_removeuser))
     app.add_handler(CommandHandler("users", cmd_users))
+    app.add_handler(CommandHandler("addwhale", cmd_addwhale))
+    app.add_handler(CommandHandler("removewhale", cmd_removewhale))
+    app.add_handler(CommandHandler("whales", cmd_whales))
 
     def _handle_signal(signum, frame):
         logger.info("Received signal %s – shutting down", signum)

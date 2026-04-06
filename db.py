@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS open_positions (
     pair_address TEXT,
     peak_price REAL DEFAULT 0,
     trailing_activated INTEGER DEFAULT 0,
+    entry_liquidity REAL DEFAULT 0,
     opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(token_address, chain)
 );
@@ -79,6 +80,27 @@ CREATE TABLE IF NOT EXISTS allowed_users (
 );
 """
 
+_CREATE_WHALE_WALLETS = """
+CREATE TABLE IF NOT EXISTS whale_wallets (
+    address TEXT PRIMARY KEY,
+    label TEXT DEFAULT '',
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+_CREATE_WHALE_EVENTS = """
+CREATE TABLE IF NOT EXISTS whale_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet_address TEXT NOT NULL,
+    token_mint TEXT NOT NULL,
+    token_symbol TEXT DEFAULT '',
+    sol_spent REAL NOT NULL,
+    tokens_received REAL NOT NULL,
+    tx_signature TEXT NOT NULL UNIQUE,
+    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 
 async def _conn() -> aiosqlite.Connection:
     db = await aiosqlite.connect(str(DB_PATH))
@@ -95,6 +117,8 @@ async def init_db():
         await db.execute(_CREATE_OPEN_POSITIONS)
         await db.execute(_CREATE_COMPLETED_TRADES)
         await db.execute(_CREATE_ALLOWED_USERS)
+        await db.execute(_CREATE_WHALE_WALLETS)
+        await db.execute(_CREATE_WHALE_EVENTS)
         # Migration: add trailing columns if they don't exist
         try:
             await db.execute("ALTER TABLE open_positions ADD COLUMN peak_price REAL DEFAULT 0")
@@ -102,6 +126,10 @@ async def init_db():
             pass  # column already exists
         try:
             await db.execute("ALTER TABLE open_positions ADD COLUMN trailing_activated INTEGER DEFAULT 0")
+        except Exception:
+            pass  # column already exists
+        try:
+            await db.execute("ALTER TABLE open_positions ADD COLUMN entry_liquidity REAL DEFAULT 0")
         except Exception:
             pass  # column already exists
         await db.commit()
@@ -148,8 +176,8 @@ async def save_open_position(position: dict):
     sql = """
         INSERT INTO open_positions
             (token_address, token_symbol, chain, entry_price, tokens_received,
-             buy_amount_native, buy_tx_hash, pair_address)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             buy_amount_native, buy_tx_hash, pair_address, entry_liquidity)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     params = (
         position["token_address"],
@@ -160,6 +188,7 @@ async def save_open_position(position: dict):
         position["buy_amount_native"],
         position["buy_tx_hash"],
         position.get("pair_address"),
+        position.get("entry_liquidity", 0),
     )
     async with aiosqlite.connect(str(DB_PATH)) as db:
         await db.execute(sql, params)
@@ -284,6 +313,85 @@ async def update_peak_price(token_address: str, chain: str, peak_price: float, t
     async with aiosqlite.connect(str(DB_PATH)) as db_conn:
         await db_conn.execute(sql, (peak_price, int(trailing_activated), token_address, chain))
         await db_conn.commit()
+
+
+async def add_whale_wallet(address: str, label: str = "") -> bool:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        try:
+            await db.execute(
+                "INSERT INTO whale_wallets (address, label) VALUES (?, ?)",
+                (address, label),
+            )
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+
+async def remove_whale_wallet(address: str) -> bool:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute(
+            "DELETE FROM whale_wallets WHERE address = ?", (address,)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_whale_wallets() -> list[dict]:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM whale_wallets ORDER BY added_at")
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def save_whale_event(event: dict) -> bool:
+    sql = """
+        INSERT OR IGNORE INTO whale_events
+            (wallet_address, token_mint, token_symbol, sol_spent, tokens_received, tx_signature)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """
+    params = (
+        event["wallet_address"],
+        event["token_mint"],
+        event.get("token_symbol", ""),
+        event["sol_spent"],
+        event["tokens_received"],
+        event["tx_signature"],
+    )
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute(sql, params)
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_whale_events(limit: int = 10) -> list[dict]:
+    sql = "SELECT * FROM whale_events ORDER BY detected_at DESC LIMIT ?"
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(sql, (limit,))
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def is_token_watched(token_mint: str, chain: str = "SOL") -> dict | None:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM open_positions WHERE token_address = ? AND chain = ? LIMIT 1",
+            (token_mint, chain),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return {"source": "open_positions", **dict(row)}
+        cursor = await db.execute(
+            "SELECT * FROM detected_tokens WHERE contract_address = ? AND chain = ? LIMIT 1",
+            (token_mint, chain),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return {"source": "detected_tokens", **dict(row)}
+    return None
 
 
 async def is_token_already_bought(contract_address: str, chain: str) -> bool:
