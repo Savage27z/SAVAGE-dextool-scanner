@@ -26,6 +26,7 @@ def _env(key: str, default=None, cast=None, required=False):
 TELEGRAM_BOT_TOKEN: str = _env("TELEGRAM_BOT_TOKEN", required=True)
 TELEGRAM_CHAT_ID: int = _env("TELEGRAM_CHAT_ID", cast=int, required=True)
 PRIVATE_KEY: str = _env("PRIVATE_KEY", required=True)
+ENCRYPTION_KEY: str = _env("ENCRYPTION_KEY", required=True)
 
 RPC_URL_SOL: str = _env("RPC_URL_SOL", default="https://api.mainnet-beta.solana.com")
 RPC_URL_ETH: str = _env("RPC_URL_ETH", default="")
@@ -58,6 +59,9 @@ WHALE_MIN_SOL: float = _env("WHALE_MIN_SOL", default="1.0", cast=float)
 ANTIRUG_ENABLED: bool = _env("ANTIRUG_ENABLED", default="true", cast=lambda v: v.lower() in ("true", "1", "yes"))
 ANTIRUG_MIN_LIQ: int = _env("ANTIRUG_MIN_LIQ", default="1000", cast=int)
 ANTIRUG_LIQ_DROP_PCT: int = _env("ANTIRUG_LIQ_DROP_PCT", default="70", cast=int)
+
+OPERATOR_FEE_PCT: float = _env("OPERATOR_FEE_PCT", default="5", cast=float)
+OPERATOR_FEE_ENABLED: bool = _env("OPERATOR_FEE_ENABLED", default="true", cast=lambda v: v.lower() in ("true", "1", "yes"))
 
 DEXTOOLS_BASE_URL = f"https://public-api.dextools.io/{DEXTOOLS_PLAN}/v2"
 
