@@ -339,7 +339,7 @@ async def get_whale_wallets() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def save_whale_event(event: dict):
+async def save_whale_event(event: dict) -> bool:
     sql = """
         INSERT OR IGNORE INTO whale_events
             (wallet_address, token_mint, token_symbol, sol_spent, tokens_received, tx_signature)
@@ -354,8 +354,9 @@ async def save_whale_event(event: dict):
         event["tx_signature"],
     )
     async with aiosqlite.connect(str(DB_PATH)) as db:
-        await db.execute(sql, params)
+        cursor = await db.execute(sql, params)
         await db.commit()
+        return cursor.rowcount > 0
 
 
 async def get_whale_events(limit: int = 10) -> list[dict]:

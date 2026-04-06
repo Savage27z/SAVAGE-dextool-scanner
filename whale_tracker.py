@@ -180,7 +180,7 @@ class WhaleTracker:
         is_held = watched.get("source") == "open_positions"
         token_symbol = watched.get("token_symbol") or watched.get("symbol") or token_mint[:8]
 
-        await db.save_whale_event({
+        saved = await db.save_whale_event({
             "wallet_address": wallet_address,
             "token_mint": token_mint,
             "token_symbol": token_symbol,
@@ -188,6 +188,8 @@ class WhaleTracker:
             "tokens_received": event["tokens_received"],
             "tx_signature": tx_signature,
         })
+        if not saved:
+            return
 
         logger.info(
             "Whale buy: %s spent %.4f SOL on %s (%s)",
