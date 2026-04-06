@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS completed_trades (
 );
 """
 
+_CREATE_ALLOWED_USERS = """
+CREATE TABLE IF NOT EXISTS allowed_users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 
 async def _conn() -> aiosqlite.Connection:
     db = await aiosqlite.connect(str(DB_PATH))
@@ -84,6 +92,7 @@ async def init_db():
         await db.execute(_CREATE_DETECTED_TOKENS)
         await db.execute(_CREATE_OPEN_POSITIONS)
         await db.execute(_CREATE_COMPLETED_TRADES)
+        await db.execute(_CREATE_ALLOWED_USERS)
         await db.commit()
     logger.info("Database initialised at %s", DB_PATH)
 
@@ -216,6 +225,42 @@ async def get_trade_history(limit: int = 10) -> list[dict]:
         cursor = await db.execute(sql, (limit,))
         rows = await cursor.fetchall()
     return [dict(r) for r in rows]
+
+
+async def add_allowed_user(user_id: int, username: str = ""):
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
+        await conn.execute(
+            "INSERT OR REPLACE INTO allowed_users (user_id, username) VALUES (?, ?)",
+            (user_id, username),
+        )
+        await conn.commit()
+    logger.info("Added allowed user %d (%s)", user_id, username)
+
+
+async def remove_allowed_user(user_id: int) -> bool:
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
+        cursor = await conn.execute("DELETE FROM allowed_users WHERE user_id = ?", (user_id,))
+        await conn.commit()
+        removed = cursor.rowcount > 0
+    if removed:
+        logger.info("Removed allowed user %d", user_id)
+    return removed
+
+
+async def get_allowed_users() -> list[dict]:
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute("SELECT * FROM allowed_users ORDER BY added_at")
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def is_user_allowed(user_id: int) -> bool:
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
+        cursor = await conn.execute(
+            "SELECT 1 FROM allowed_users WHERE user_id = ? LIMIT 1", (user_id,)
+        )
+        return await cursor.fetchone() is not None
 
 
 async def is_token_already_bought(contract_address: str, chain: str) -> bool:

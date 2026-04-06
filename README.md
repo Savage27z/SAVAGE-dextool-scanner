@@ -69,14 +69,31 @@ The bot will connect to Telegram and send a startup message. Use commands to con
 
 ## Bot Commands
 
+**Anyone** (including unapproved users):
 | Command | Description |
 |---|---|
-| `/start` | Start scanning and auto-trading |
-| `/stop` | Stop scanning (bot stays responsive) |
+| `/help` | Show bot info and available commands |
+
+**Authorized users** (admin + approved friends):
+| Command | Description |
+|---|---|
 | `/status` | Show open positions with live ROI |
 | `/balance` | Show current wallet balance |
 | `/history` | Show last 10 completed trades |
 | `/config` | Display current configuration |
+
+**Admin only** (`TELEGRAM_CHAT_ID` owner):
+| Command | Description |
+|---|---|
+| `/start` | Start scanning and auto-trading |
+| `/stop` | Stop scanning (bot stays responsive) |
+| `/adduser <id>` | Grant a friend read-only access |
+| `/removeuser <id>` | Revoke a user's access |
+| `/users` | List all authorized users |
+
+### Sharing with friends
+
+Your friends can message the bot directly on Telegram — no GitHub or setup needed. When they send any command, the bot shows them their user ID. You then run `/adduser <their_id>` to grant them read-only access to positions, balance, history, and config.
 
 ## Architecture
 

@@ -34,6 +34,31 @@ monitor_task: asyncio.Task | None = None
 is_running: bool = False
 
 
+def _is_admin(update) -> bool:
+    return update.effective_user.id == TELEGRAM_CHAT_ID
+
+
+async def _is_authorized(update) -> bool:
+    if _is_admin(update):
+        return True
+    return await db.is_user_allowed(update.effective_user.id)
+
+
+async def _reject_unauthorized(update) -> bool:
+    if await _is_authorized(update):
+        return False
+    uid = update.effective_user.id
+    uname = update.effective_user.username or update.effective_user.first_name or ""
+    await update.message.reply_html(
+        f"🔒 <b>Access Denied</b>\n\n"
+        f"Your user ID: <code>{uid}</code>\n"
+        f"Ask the bot admin to run:\n"
+        f"<code>/adduser {uid}</code>"
+    )
+    logger.warning("Unauthorized access attempt from user %d (%s)", uid, uname)
+    return True
+
+
 async def scanner_loop():
     global is_running
     native = NATIVE_SYMBOL.get(CHAIN.upper(), "SOL")
@@ -98,9 +123,40 @@ async def scanner_loop():
         await asyncio.sleep(SCAN_INTERVAL)
 
 
+async def cmd_help(update, context):
+    is_admin = _is_admin(update)
+    is_auth = await _is_authorized(update)
+
+    lines = [
+        "🤖 <b>DexTool Scanner Bot</b>\n",
+        "Scans DexTools for new low-cap tokens on Solana, auto-buys qualifying tokens, and takes profit automatically.\n",
+    ]
+
+    if is_auth:
+        lines.append("<b>Commands:</b>")
+        lines.append("/help — Show this message")
+        lines.append("/status — Open positions with live ROI")
+        lines.append("/balance — Wallet balance")
+        lines.append("/history — Last 10 completed trades")
+        lines.append("/config — Current bot configuration")
+        if is_admin:
+            lines.append("\n<b>Admin only:</b>")
+            lines.append("/start — Start scanning and trading")
+            lines.append("/stop — Pause scanning and trading")
+            lines.append("/adduser &lt;user_id&gt; — Grant access")
+            lines.append("/removeuser &lt;user_id&gt; — Revoke access")
+            lines.append("/users — List authorized users")
+    else:
+        uid = update.effective_user.id
+        lines.append(f"Your user ID: <code>{uid}</code>")
+        lines.append(f"Ask the admin to run: <code>/adduser {uid}</code>")
+
+    await update.message.reply_html("\n".join(lines))
+
+
 async def cmd_start(update, context):
-    if update.effective_chat.id != TELEGRAM_CHAT_ID:
-        await update.message.reply_text("Unauthorized.")
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
         return
 
     global is_running, scanner_task, monitor_task
@@ -132,8 +188,8 @@ async def cmd_start(update, context):
 
 
 async def cmd_stop(update, context):
-    if update.effective_chat.id != TELEGRAM_CHAT_ID:
-        await update.message.reply_text("Unauthorized.")
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
         return
 
     global is_running, scanner_task, monitor_task
@@ -158,8 +214,7 @@ async def cmd_stop(update, context):
 
 
 async def cmd_status(update, context):
-    if update.effective_chat.id != TELEGRAM_CHAT_ID:
-        await update.message.reply_text("Unauthorized.")
+    if await _reject_unauthorized(update):
         return
 
     positions = await monitor.get_positions_with_roi()
@@ -184,8 +239,7 @@ async def cmd_status(update, context):
 
 
 async def cmd_balance(update, context):
-    if update.effective_chat.id != TELEGRAM_CHAT_ID:
-        await update.message.reply_text("Unauthorized.")
+    if await _reject_unauthorized(update):
         return
 
     native = NATIVE_SYMBOL.get(CHAIN.upper(), "SOL")
@@ -198,8 +252,7 @@ async def cmd_balance(update, context):
 
 
 async def cmd_history(update, context):
-    if update.effective_chat.id != TELEGRAM_CHAT_ID:
-        await update.message.reply_text("Unauthorized.")
+    if await _reject_unauthorized(update):
         return
 
     trades = await db.get_trade_history(limit=10)
@@ -224,8 +277,7 @@ async def cmd_history(update, context):
 
 
 async def cmd_config(update, context):
-    if update.effective_chat.id != TELEGRAM_CHAT_ID:
-        await update.message.reply_text("Unauthorized.")
+    if await _reject_unauthorized(update):
         return
 
     msg = (
@@ -240,6 +292,66 @@ async def cmd_config(update, context):
         f"Monitor Interval: {MONITOR_INTERVAL}s"
     )
     await update.message.reply_html(msg)
+
+
+async def cmd_adduser(update, context):
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
+        return
+
+    if not context.args:
+        await update.message.reply_html("Usage: <code>/adduser &lt;user_id&gt;</code>")
+        return
+
+    try:
+        user_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Invalid user ID. Must be a number.")
+        return
+
+    username = context.args[1] if len(context.args) > 1 else ""
+    await db.add_allowed_user(user_id, username)
+    await update.message.reply_html(f"✅ User <code>{user_id}</code> has been granted access.")
+
+
+async def cmd_removeuser(update, context):
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
+        return
+
+    if not context.args:
+        await update.message.reply_html("Usage: <code>/removeuser &lt;user_id&gt;</code>")
+        return
+
+    try:
+        user_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Invalid user ID. Must be a number.")
+        return
+
+    removed = await db.remove_allowed_user(user_id)
+    if removed:
+        await update.message.reply_html(f"🚫 User <code>{user_id}</code> access revoked.")
+    else:
+        await update.message.reply_html(f"User <code>{user_id}</code> was not in the list.")
+
+
+async def cmd_users(update, context):
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
+        return
+
+    users = await db.get_allowed_users()
+    if not users:
+        await update.message.reply_text("No authorized users (besides admin).")
+        return
+
+    lines = ["👥 <b>Authorized Users</b>\n"]
+    for u in users:
+        name = u.get("username") or "—"
+        lines.append(f"• <code>{u['user_id']}</code> ({name}) — added {u.get('added_at', '?')}")
+
+    await update.message.reply_html("\n".join(lines))
 
 
 async def post_init(application):
@@ -286,12 +398,16 @@ def main():
         .build()
     )
 
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("balance", cmd_balance))
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("config", cmd_config))
+    app.add_handler(CommandHandler("adduser", cmd_adduser))
+    app.add_handler(CommandHandler("removeuser", cmd_removeuser))
+    app.add_handler(CommandHandler("users", cmd_users))
 
     def _handle_signal(signum, frame):
         logger.info("Received signal %s – shutting down", signum)
