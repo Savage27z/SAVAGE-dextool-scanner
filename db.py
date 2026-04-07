@@ -183,6 +183,10 @@ async def init_db():
         except Exception:
             pass
         try:
+            await db.execute("ALTER TABLE open_positions ADD COLUMN tiers_completed TEXT DEFAULT '[]'")
+        except Exception:
+            pass
+        try:
             cursor = await db.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='open_positions'"
             )
@@ -256,8 +260,8 @@ async def save_open_position(position: dict):
     sql = """
         INSERT INTO open_positions
             (token_address, token_symbol, chain, entry_price, tokens_received,
-             buy_amount_native, buy_tx_hash, pair_address, entry_liquidity, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             buy_amount_native, buy_tx_hash, pair_address, entry_liquidity, user_id, tiers_completed)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     params = (
         position["token_address"],
@@ -270,6 +274,7 @@ async def save_open_position(position: dict):
         position.get("pair_address"),
         position.get("entry_liquidity", 0),
         position.get("user_id", 0),
+        "[]",
     )
     async with aiosqlite.connect(str(DB_PATH)) as db:
         await db.execute(sql, params)
@@ -343,6 +348,75 @@ async def close_position(token_address: str, chain: str, exit_data: dict, user_i
         chain,
         user_id,
         exit_data["roi_percent"],
+    )
+
+
+async def update_tiers_completed(token_address: str, chain: str, tiers_completed: list[int], user_id: int = 0):
+    sql = """
+        UPDATE open_positions
+        SET tiers_completed = ?
+        WHERE token_address = ? AND chain = ? AND user_id = ?
+    """
+    async with aiosqlite.connect(str(DB_PATH)) as db_conn:
+        await db_conn.execute(sql, (json.dumps(tiers_completed), token_address, chain, user_id))
+        await db_conn.commit()
+
+
+async def record_partial_sell(token_address: str, chain: str, user_id: int, sell_fraction: float, exit_data: dict):
+    """Record a partial sell: log to completed_trades, reduce open_position amounts proportionally."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM open_positions WHERE token_address = ? AND chain = ? AND user_id = ?",
+            (token_address, chain, user_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return
+        pos = dict(row)
+
+        sold_tokens = pos["tokens_received"] * sell_fraction
+        sold_buy_native = pos["buy_amount_native"] * sell_fraction
+        remaining_tokens = pos["tokens_received"] - sold_tokens
+        remaining_buy_native = pos["buy_amount_native"] - sold_buy_native
+
+        opened_at = pos["opened_at"]
+        duration = exit_data.get("duration_seconds", 0)
+
+        insert_sql = """
+            INSERT INTO completed_trades
+                (token_address, token_symbol, chain, entry_price, exit_price,
+                 tokens_amount, buy_amount_native, sell_amount_native, profit_usd,
+                 roi_percent, buy_tx_hash, sell_tx_hash, opened_at, duration_seconds, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            pos["token_address"],
+            pos["token_symbol"],
+            pos["chain"],
+            pos["entry_price"],
+            exit_data["exit_price"],
+            sold_tokens,
+            sold_buy_native,
+            exit_data["sell_amount_native"],
+            exit_data.get("profit_usd"),
+            exit_data["roi_percent"],
+            pos["buy_tx_hash"],
+            exit_data["sell_tx_hash"],
+            opened_at,
+            duration,
+            user_id,
+        )
+        await db.execute(insert_sql, params)
+
+        await db.execute(
+            "UPDATE open_positions SET tokens_received = ?, buy_amount_native = ? WHERE token_address = ? AND chain = ? AND user_id = ?",
+            (remaining_tokens, remaining_buy_native, token_address, chain, user_id),
+        )
+        await db.commit()
+    logger.info(
+        "Partial sell %.0f%% of %s for user %d | ROI %.2f%%",
+        sell_fraction * 100, pos["token_symbol"], user_id, exit_data["roi_percent"],
     )
 
 

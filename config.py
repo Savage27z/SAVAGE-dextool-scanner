@@ -67,6 +67,32 @@ MAX_OPEN_POSITIONS: int = _env("MAX_OPEN_POSITIONS", default="5", cast=int)
 MAX_DAILY_LOSS: float = _env("MAX_DAILY_LOSS", default="2.0", cast=float)  # in native token (SOL/ETH/BNB)
 MAX_BUY_AMOUNT: float = _env("MAX_BUY_AMOUNT", default="1.0", cast=float)  # max per single buy in native token
 
+SELL_TIERS_RAW: str = _env("SELL_TIERS", default="")
+
+
+def _parse_sell_tiers(raw: str) -> list[tuple[float, float]]:
+    """Parse 'ROI:PERCENT,ROI:PERCENT' into sorted list of (roi_threshold, sell_percent)."""
+    if not raw.strip():
+        return []
+    tiers = []
+    for part in raw.split(","):
+        part = part.strip()
+        if ":" not in part:
+            continue
+        roi_str, pct_str = part.split(":", 1)
+        try:
+            roi = float(roi_str)
+            pct = float(pct_str)
+            if 0 < pct <= 100 and roi > 0:
+                tiers.append((roi, pct))
+        except ValueError:
+            continue
+    tiers.sort(key=lambda t: t[0])
+    return tiers
+
+
+SELL_TIERS: list[tuple[float, float]] = _parse_sell_tiers(SELL_TIERS_RAW)
+
 DEXTOOLS_BASE_URL = f"https://public-api.dextools.io/{DEXTOOLS_PLAN}/v2"
 
 CHAIN_MAP = {

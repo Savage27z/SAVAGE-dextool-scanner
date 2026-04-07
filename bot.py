@@ -47,6 +47,7 @@ from config import (
     MAX_OPEN_POSITIONS,
     MAX_DAILY_LOSS,
     MAX_BUY_AMOUNT,
+    SELL_TIERS_RAW,
     logger,
 )
 from crypto_utils import encrypt_key, decrypt_key
@@ -738,6 +739,7 @@ async def cmd_config(update, context):
         f"Anti-Rug Min Liquidity: ${ANTIRUG_MIN_LIQ:,}\n"
         f"Anti-Rug Drop Threshold: {ANTIRUG_LIQ_DROP_PCT}%\n"
         f"Operator Fee: {OPERATOR_FEE_PCT}% ({'Enabled' if OPERATOR_FEE_ENABLED else 'Disabled'})"
+        f"\nSell Tiers: {SELL_TIERS_RAW if SELL_TIERS_RAW else 'None (full sell at TP)'}"
         f"\n\n<b>Risk Management</b>\n"
         f"Max Positions: {MAX_OPEN_POSITIONS} per user\n"
         f"Max Daily Loss: {MAX_DAILY_LOSS} {NATIVE_SYMBOL.get(CHAIN.upper(), 'SOL')}\n"
@@ -2175,6 +2177,7 @@ async def handle_callback(update, context):
                 f"Min Safety Score: {MIN_SCORE}/100\n"
                 f"Scan Interval: {SCAN_INTERVAL}s\n"
                 f"Monitor Interval: {MONITOR_INTERVAL}s"
+                f"\nSell Tiers: {SELL_TIERS_RAW if SELL_TIERS_RAW else 'None (full sell at TP)'}"
                 f"\n\n<b>Risk Management</b>\n"
                 f"Max Positions: {MAX_OPEN_POSITIONS} per user\n"
                 f"Max Daily Loss: {MAX_DAILY_LOSS} {NATIVE_SYMBOL.get(CHAIN.upper(), 'SOL')}\n"

@@ -188,6 +188,21 @@ class Notifier:
         )
         await self.send_message(msg, chat_id=chat_id)
 
+    async def notify_tier_sell(
+        self, symbol: str, tier_label: str, sell_percent: float, roi: float,
+        native_received: float, tx_hash: str, chain: str, chat_id: int | None = None,
+    ):
+        link = _tx_link(tx_hash, chain)
+        native = {"SOL": "SOL", "ETH": "ETH", "BSC": "BNB"}.get(chain.upper(), "SOL")
+        msg = (
+            f"\U0001f4ca <b>TIER SELL \u2014 {_esc(tier_label)}</b>\n"
+            f"Token: {_esc(symbol)} | Sold: {sell_percent:.0f}%\n"
+            f"ROI at sell: {roi:+.2f}%\n"
+            f"Received: {native_received:.6f} {native}\n"
+            f"TX: {link}"
+        )
+        await self.send_message(msg, chat_id=chat_id)
+
     async def notify_daily_loss_limit(self, user_id: int, daily_loss: float, limit: float, native: str):
         msg = (
             "⚠️ <b>DAILY LOSS LIMIT REACHED</b>\n"
