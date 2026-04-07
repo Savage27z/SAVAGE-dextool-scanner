@@ -301,6 +301,7 @@ async def cmd_help(update, context):
             lines.append("/copytrade — Whale copy trading status")
             lines.append("/fees — Fee revenue stats")
             lines.append("/stats all — All users' combined stats")
+            lines.append("/backtest [days] — Replay scoring strategy against history")
     else:
         uid = update.effective_user.id
         lines.append(f"Your user ID: <code>{uid}</code>")
@@ -2361,6 +2362,74 @@ async def handle_callback(update, context):
             pass
 
 
+async def cmd_backtest(update, context):
+    """Replay scoring strategy against historical scan data."""
+    await _register_chat(update)
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
+        return
+
+    days = 7
+    if context.args:
+        try:
+            days = int(context.args[0])
+            days = max(1, min(days, 90))
+        except ValueError:
+            pass
+
+    native = NATIVE_SYMBOL.get(CHAIN.upper(), "SOL")
+    data = await db.get_backtest_data(days=days)
+    summary = data["summary"]
+
+    if not summary or summary.get("total_scanned", 0) == 0:
+        await update.message.reply_text(f"No scan history for the last {days} days. Start the bot and scan some tokens first.")
+        return
+
+    msg_parts = [
+        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501",
+        f"\U0001f9ea <b>BACKTEST \u2014 Last {days} Days</b>",
+        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501",
+        "",
+        "<b>Scan Summary</b>",
+        f"   Total Scanned: {summary['total_scanned']}",
+        f"   Bought: {summary['total_bought'] or 0}",
+        f"   Avg Score: {summary['avg_score']:.1f}",
+        f"   Score Range: {summary['min_score']} \u2013 {summary['max_score']}",
+        f"   Current MIN_SCORE: {MIN_SCORE}",
+    ]
+
+    ranges = data.get("score_ranges", [])
+    if ranges:
+        msg_parts.extend(["", "<b>Score Distribution</b>"])
+        for r in ranges:
+            bar_len = min(int(r["total_scanned"] / max(summary["total_scanned"], 1) * 20), 20)
+            bar = "\u2588" * bar_len
+            msg_parts.append(f"   {r['score_range']}: {r['total_scanned']} tokens {bar}")
+
+    sims = data.get("simulations", [])
+    if sims:
+        msg_parts.extend(["", "<b>MIN_SCORE Simulations</b>"])
+        msg_parts.append("   Score | Would Buy | Traded | Win% | Avg ROI")
+        for s in sims:
+            marker = " \u25c0" if s["threshold"] == MIN_SCORE else ""
+            win_rate = f"{s['win_rate']:.0f}%" if s['traded'] > 0 else "N/A"
+            avg_roi = f"{s['avg_roi']:+.1f}%" if s['traded'] > 0 else "N/A"
+            msg_parts.append(
+                f"   \u2265{s['threshold']:3d}  |  {s['would_buy']:5d}    |  {s['traded']:4d}   | {win_rate:>4s} | {avg_roi:>7s}{marker}"
+            )
+
+    outcomes = data.get("trade_outcomes", [])
+    if outcomes:
+        msg_parts.extend(["", f"<b>Trade Outcomes by Score (last {days}d)</b>"])
+        for o in outcomes[:15]:
+            icon = "\U0001f7e2" if o["roi_percent"] > 0 else "\U0001f534"
+            pnl = o["sell_amount_native"] - o["buy_amount_native"]
+            sign = "+" if pnl >= 0 else ""
+            msg_parts.append(f"   {icon} [{o['score']}] {o['symbol']}: {o['roi_percent']:+.1f}% ({sign}{pnl:.4f} {native})")
+
+    await update.message.reply_html("\n".join(msg_parts))
+
+
 def main():
     logger.info("Starting DexTool Scanner Bot …")
 
@@ -2396,6 +2465,7 @@ def main():
     app.add_handler(CommandHandler("copytrade", cmd_copytrade))
     app.add_handler(CommandHandler("fees", cmd_fees))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("backtest", cmd_backtest))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     def _handle_signal(signum, frame):
