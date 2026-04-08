@@ -227,8 +227,7 @@ CREATE TABLE IF NOT EXISTS dca_orders (
     interval_seconds INTEGER NOT NULL,
     status TEXT DEFAULT 'active',
     last_buy_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, token_address, chain, status)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -277,6 +276,10 @@ async def init_db():
         await db.execute(_CREATE_TOKEN_BLACKLIST)
         await db.execute(_CREATE_TOKEN_WHITELIST)
         await db.execute(_CREATE_DCA_ORDERS)
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_dca_active_unique "
+            "ON dca_orders(user_id, token_address, chain) WHERE status = 'active'"
+        )
         await db.execute(_CREATE_LIMIT_ORDERS)
         try:
             await db.execute("ALTER TABLE open_positions ADD COLUMN peak_price REAL DEFAULT 0")
