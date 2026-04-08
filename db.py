@@ -159,6 +159,21 @@ CREATE TABLE IF NOT EXISTS snipe_targets (
 );
 """
 
+_CREATE_USER_SETTINGS = """
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER PRIMARY KEY,
+    min_score INTEGER,
+    stop_loss INTEGER,
+    take_profit INTEGER,
+    buy_percent INTEGER,
+    trailing_drop INTEGER,
+    slippage INTEGER,
+    max_positions INTEGER,
+    max_buy_amount REAL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 _CREATE_FEE_LEDGER = """
 CREATE TABLE IF NOT EXISTS fee_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -196,6 +211,7 @@ async def init_db():
         await db.execute(_CREATE_FEE_LEDGER)
         await db.execute(_CREATE_SCAN_HISTORY)
         await db.execute(_CREATE_SNIPE_TARGETS)
+        await db.execute(_CREATE_USER_SETTINGS)
         try:
             await db.execute("ALTER TABLE open_positions ADD COLUMN peak_price REAL DEFAULT 0")
         except Exception:
@@ -1114,3 +1130,67 @@ async def mark_snipe_filled(token_address: str, user_id: int, tx_hash: str):
             (tx_hash, token_address, user_id),
         )
         await db.commit()
+
+
+_USER_SETTINGS_COLUMNS = frozenset({
+    "min_score", "stop_loss", "take_profit", "buy_percent",
+    "trailing_drop", "slippage", "max_positions", "max_buy_amount",
+})
+
+
+async def get_user_settings(user_id: int) -> dict | None:
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM user_settings WHERE user_id = ?", (user_id,)
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
+async def upsert_user_setting(user_id: int, key: str, value) -> bool:
+    if key not in _USER_SETTINGS_COLUMNS:
+        return False
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
+        await conn.execute(
+            f"INSERT INTO user_settings (user_id, {key}, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+            f"ON CONFLICT(user_id) DO UPDATE SET {key} = excluded.{key}, updated_at = CURRENT_TIMESTAMP",
+            (user_id, value),
+        )
+        await conn.commit()
+    return True
+
+
+async def delete_user_settings(user_id: int) -> bool:
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
+        cursor = await conn.execute(
+            "DELETE FROM user_settings WHERE user_id = ?", (user_id,)
+        )
+        await conn.commit()
+    return cursor.rowcount > 0
+
+
+async def get_effective_config(user_id: int) -> dict:
+    from config import (
+        MIN_SCORE, STOP_LOSS, TAKE_PROFIT, BUY_PERCENT,
+        TRAILING_DROP, SLIPPAGE, MAX_OPEN_POSITIONS, MAX_BUY_AMOUNT,
+    )
+    defaults = {
+        "min_score": MIN_SCORE,
+        "stop_loss": STOP_LOSS,
+        "take_profit": TAKE_PROFIT,
+        "buy_percent": BUY_PERCENT,
+        "trailing_drop": TRAILING_DROP,
+        "slippage": SLIPPAGE,
+        "max_positions": MAX_OPEN_POSITIONS,
+        "max_buy_amount": MAX_BUY_AMOUNT,
+    }
+    user = await get_user_settings(user_id)
+    if user:
+        for key in defaults:
+            val = user.get(key)
+            if val is not None:
+                defaults[key] = val
+    return defaults

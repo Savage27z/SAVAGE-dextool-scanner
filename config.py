@@ -29,6 +29,7 @@ PRIVATE_KEY: str = _env("PRIVATE_KEY", required=True)
 ENCRYPTION_KEY: str = _env("ENCRYPTION_KEY", required=True)
 
 RPC_URL_SOL: str = _env("RPC_URL_SOL", default="https://api.mainnet-beta.solana.com")
+RPC_URLS_SOL: list[str] = [u.strip() for u in RPC_URL_SOL.split(",") if u.strip()]
 RPC_URL_ETH: str = _env("RPC_URL_ETH", default="")
 RPC_URL_BSC: str = _env("RPC_URL_BSC", default="")
 

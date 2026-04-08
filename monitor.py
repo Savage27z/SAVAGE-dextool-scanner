@@ -6,6 +6,7 @@ import json
 
 import db
 from config import CHAIN, MONITOR_INTERVAL, NATIVE_SYMBOL, STOP_LOSS, TAKE_PROFIT, TRAILING_DROP, TRAILING_ENABLED, ANTIRUG_ENABLED, ANTIRUG_MIN_LIQ, ANTIRUG_LIQ_DROP_PCT, TELEGRAM_CHAT_ID, SELL_TIERS, logger
+from db import get_effective_config
 from fee_collector import collect_fee
 from dexscreener import get_token_liquidity
 from trader import create_user_trader, SolanaTrader
@@ -205,6 +206,7 @@ class ProfitMonitor:
 
             user_trader = _trader_cache[user_id]
             notify_chat_id = user_id if user_id != 0 else None
+            user_cfg = await get_effective_config(user_id)
 
             try:
                 if ANTIRUG_ENABLED:
@@ -317,7 +319,7 @@ class ProfitMonitor:
                     trailing_activated = bool(pos.get("trailing_activated", 0))
                     peak_price = pos.get("peak_price", 0) or 0
 
-                    if roi >= TAKE_PROFIT and not trailing_activated:
+                    if roi >= user_cfg["take_profit"] and not trailing_activated:
                         trailing_activated = True
                         peak_price = current_price
                         await db.update_peak_price(token_address, chain, peak_price, True, user_id=user_id)
@@ -329,7 +331,7 @@ class ProfitMonitor:
                         await self.notifier.send_message(
                             f"📈 <b>Trailing TP activated</b> for {symbol}\n"
                             f"ROI: {roi:+.2f}% | Peak: {peak_price:.10f} {native}\n"
-                            f"Will sell on {TRAILING_DROP}% drop from peak.",
+                            f"Will sell on {user_cfg['trailing_drop']}% drop from peak.",
                             chat_id=notify_chat_id,
                         )
 
@@ -340,7 +342,7 @@ class ProfitMonitor:
                             logger.debug("New peak for %s: %.10f", symbol, peak_price)
                         else:
                             drop_from_peak = ((peak_price - current_price) / peak_price) * 100 if peak_price > 0 else 0
-                            if drop_from_peak >= TRAILING_DROP:
+                            if drop_from_peak >= user_cfg["trailing_drop"]:
                                 logger.info(
                                     "Trailing sell for %s – dropped %.2f%% from peak %.10f",
                                     symbol, drop_from_peak, peak_price,
@@ -367,8 +369,8 @@ class ProfitMonitor:
                                         await self._try_collect_fee(user_id, symbol, profit_native, notify_chat_id)
 
                 else:
-                    if roi >= TAKE_PROFIT:
-                        logger.info("TP hit for %s – ROI %.2f%% >= %d%%", symbol, roi, TAKE_PROFIT)
+                    if roi >= user_cfg["take_profit"]:
+                        logger.info("TP hit for %s – ROI %.2f%% >= %d%%", symbol, roi, user_cfg["take_profit"])
                         sell_result = await self._execute_sell_and_close(pos, roi, "Take-profit", user_trader=user_trader, user_id=user_id)
                         if sell_result:
                             sold = True
@@ -390,8 +392,8 @@ class ProfitMonitor:
                             if profit_native > 0:
                                 await self._try_collect_fee(user_id, symbol, profit_native, notify_chat_id)
 
-                if not sold and STOP_LOSS < 0 and roi <= STOP_LOSS:
-                    logger.info("SL hit for %s – ROI %.2f%% <= %d%%", symbol, roi, STOP_LOSS)
+                if not sold and user_cfg["stop_loss"] < 0 and roi <= user_cfg["stop_loss"]:
+                    logger.info("SL hit for %s – ROI %.2f%% <= %d%%", symbol, roi, user_cfg["stop_loss"])
                     sell_result = await self._execute_sell_and_close(pos, roi, "Stop-loss", user_trader=user_trader, user_id=user_id)
                     if sell_result:
                         native = NATIVE_SYMBOL.get(chain.upper(), "SOL")

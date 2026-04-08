@@ -188,9 +188,10 @@ async def scanner_loop():
                                 # --- Risk Management Checks ---
                                 # 1. Max open positions
                                 open_count = await db.count_open_positions(uid)
-                                if open_count >= MAX_OPEN_POSITIONS:
+                                user_cfg = await db.get_effective_config(uid)
+                                if open_count >= user_cfg["max_positions"]:
                                     logger.debug("User %d at max positions (%d/%d) — skipping %s",
-                                                 uid, open_count, MAX_OPEN_POSITIONS, token.get("symbol"))
+                                                 uid, open_count, user_cfg["max_positions"], token.get("symbol"))
                                     continue
 
                                 # 2. Daily loss limit
@@ -213,9 +214,9 @@ async def scanner_loop():
                                     continue
 
                                 # 3. Max buy amount cap
-                                if MAX_BUY_AMOUNT > 0 and buy_amount > MAX_BUY_AMOUNT:
-                                    buy_amount = MAX_BUY_AMOUNT
-                                    logger.debug("Capped buy for user %d to %.4f", uid, MAX_BUY_AMOUNT)
+                                if user_cfg["max_buy_amount"] > 0 and buy_amount > user_cfg["max_buy_amount"]:
+                                    buy_amount = user_cfg["max_buy_amount"]
+                                    logger.debug("Capped buy for user %d to %.4f", uid, user_cfg["max_buy_amount"])
 
                                 await notifier.send_to_user(
                                     uid,
@@ -288,7 +289,6 @@ async def cmd_help(update, context):
         lines.append("/balance — Wallet balance")
         lines.append("/history — Last 10 completed trades")
         lines.append("/portfolio — Full portfolio overview with PnL")
-        lines.append("/config — Current bot configuration")
         lines.append("/buy &lt;address&gt; [amount] — Manual buy")
         lines.append("/sell &lt;address&gt; [percent] — Manual sell")
         lines.append("/info &lt;address&gt; — Token research &amp; safety report")
@@ -298,6 +298,10 @@ async def cmd_help(update, context):
         lines.append("/export — Export wallet credentials (DM only)")
         lines.append("/stats — Detailed trading performance analytics")
         lines.append("/lowcaps [count] — Show recent detected tokens")
+        lines.append("")
+        lines.append("<b>⚙️ Settings:</b>")
+        lines.append("/mysettings — View/edit your personal trading settings")
+        lines.append("/config — Current global bot configuration")
         if is_admin:
             lines.append("\n<b>Admin only:</b>")
             lines.append("/start — Start scanning and trading")
@@ -896,6 +900,114 @@ async def cmd_config(update, context):
         f"\nSniper: {'ON' if SNIPER_ENABLED else 'OFF'} | Check: {SNIPER_CHECK_INTERVAL}s | Min Liq: ${SNIPER_MIN_LIQUIDITY:,}\n"
     )
     await update.message.reply_html(msg)
+
+
+_SETTINGS_VALIDATION = {
+    "min_score":     (int,   0,      100),
+    "stop_loss":     (int,  -100,    0),
+    "take_profit":   (int,   1,      1000),
+    "buy_percent":   (int,   1,      100),
+    "trailing_drop": (int,   1,      100),
+    "slippage":      (int,   1,      100),
+    "max_positions": (int,   1,      20),
+    "max_buy_amount":(float, 0.001,  100),
+}
+
+
+async def cmd_mysettings(update, context):
+    await _register_chat(update)
+    if await _reject_unauthorized(update):
+        return
+
+    uid = update.effective_user.id
+    args = context.args or []
+
+    if len(args) == 1 and args[0].lower() == "reset":
+        deleted = await db.delete_user_settings(uid)
+        if deleted:
+            await update.message.reply_html("✅ All your settings have been reset to global defaults.")
+        else:
+            await update.message.reply_html("ℹ️ You have no custom settings to reset.")
+        return
+
+    if len(args) >= 2:
+        key = args[0].lower()
+        raw_value = args[1]
+        if key not in _SETTINGS_VALIDATION:
+            valid_keys = ", ".join(sorted(_SETTINGS_VALIDATION))
+            await update.message.reply_html(f"❌ Unknown setting <code>{key}</code>.\nValid keys: <code>{valid_keys}</code>")
+            return
+        cast, lo, hi = _SETTINGS_VALIDATION[key]
+        try:
+            value = cast(raw_value)
+        except (ValueError, TypeError):
+            await update.message.reply_html(f"❌ Invalid value. Expected {cast.__name__} between {lo} and {hi}.")
+            return
+        if value < lo or value > hi:
+            await update.message.reply_html(f"❌ Value out of range. <code>{key}</code> must be between {lo} and {hi}.")
+            return
+        await db.upsert_user_setting(uid, key, value)
+        await update.message.reply_html(f"✅ <code>{key}</code> set to <b>{value}</b>")
+        return
+
+    if args:
+        await update.message.reply_html(
+            "Usage:\n"
+            "<code>/mysettings</code> — view current settings\n"
+            "<code>/mysettings &lt;key&gt; &lt;value&gt;</code> — set a value\n"
+            "<code>/mysettings reset</code> — reset all to defaults"
+        )
+        return
+
+    cfg = await db.get_effective_config(uid)
+    user_row = await db.get_user_settings(uid)
+
+    from config import (
+        MIN_SCORE, STOP_LOSS, TAKE_PROFIT, BUY_PERCENT,
+        TRAILING_DROP, SLIPPAGE, MAX_OPEN_POSITIONS, MAX_BUY_AMOUNT,
+    )
+    global_defaults = {
+        "min_score": MIN_SCORE,
+        "stop_loss": STOP_LOSS,
+        "take_profit": TAKE_PROFIT,
+        "buy_percent": BUY_PERCENT,
+        "trailing_drop": TRAILING_DROP,
+        "slippage": SLIPPAGE,
+        "max_positions": MAX_OPEN_POSITIONS,
+        "max_buy_amount": MAX_BUY_AMOUNT,
+    }
+
+    labels = {
+        "min_score": "Min Score",
+        "stop_loss": "Stop Loss",
+        "take_profit": "Take Profit",
+        "buy_percent": "Buy %",
+        "trailing_drop": "Trailing Drop",
+        "slippage": "Slippage",
+        "max_positions": "Max Positions",
+        "max_buy_amount": "Max Buy Amount",
+    }
+    suffixes = {
+        "stop_loss": "%", "take_profit": "%", "buy_percent": "%",
+        "trailing_drop": "%", "slippage": "%",
+    }
+
+    lines = ["⚙️ <b>Your Settings</b>", "─────────────────"]
+    for key, label in labels.items():
+        val = cfg[key]
+        suffix = suffixes.get(key, "")
+        is_custom = user_row is not None and user_row.get(key) is not None
+        if is_custom:
+            lines.append(f"{label}: <b>{val}{suffix}</b> ✏️  (global: {global_defaults[key]}{suffix})")
+        else:
+            lines.append(f"{label}: {val}{suffix}  <i>(global default)</i>")
+
+    lines.append("")
+    lines.append("<b>Usage:</b> <code>/mysettings &lt;key&gt; &lt;value&gt;</code>")
+    lines.append("<b>Example:</b> <code>/mysettings min_score 70</code>")
+    lines.append("<b>Reset all:</b> <code>/mysettings reset</code>")
+
+    await update.message.reply_html("\n".join(lines))
 
 
 async def cmd_buy(update, context):
@@ -1765,8 +1877,9 @@ async def post_init(application):
 
     await db.init_db()
 
-    from config import ALERT_BROADCAST
+    from config import ALERT_BROADCAST, RPC_URLS_SOL
     alerts_enabled = ALERT_BROADCAST
+    logger.info("Configured %d Solana RPC endpoint(s)", len(RPC_URLS_SOL))
 
     trader = create_trader(CHAIN)
     notifier = Notifier(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
@@ -2854,6 +2967,7 @@ def main():
     app.add_handler(CommandHandler("balance", cmd_balance))
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("config", cmd_config))
+    app.add_handler(CommandHandler("mysettings", cmd_mysettings))
     app.add_handler(CommandHandler("buy", cmd_buy))
     app.add_handler(CommandHandler("sell", cmd_sell))
     app.add_handler(CommandHandler("info", cmd_info))
