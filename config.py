@@ -29,6 +29,7 @@ PRIVATE_KEY: str = _env("PRIVATE_KEY", required=True)
 ENCRYPTION_KEY: str = _env("ENCRYPTION_KEY", required=True)
 
 RPC_URL_SOL: str = _env("RPC_URL_SOL", default="https://api.mainnet-beta.solana.com")
+RPC_URLS_SOL: list[str] = [u.strip() for u in RPC_URL_SOL.split(",") if u.strip()]
 RPC_URL_ETH: str = _env("RPC_URL_ETH", default="")
 RPC_URL_BSC: str = _env("RPC_URL_BSC", default="")
 
@@ -69,6 +70,9 @@ OPERATOR_FEE_ENABLED: bool = _env("OPERATOR_FEE_ENABLED", default="true", cast=l
 MAX_OPEN_POSITIONS: int = _env("MAX_OPEN_POSITIONS", default="3", cast=int)
 MAX_DAILY_LOSS: float = _env("MAX_DAILY_LOSS", default="2.0", cast=float)  # in native token (SOL/ETH/BNB)
 MAX_BUY_AMOUNT: float = _env("MAX_BUY_AMOUNT", default="1.0", cast=float)  # max per single buy in native token
+
+COMPOUND_ENABLED: bool = _env("COMPOUND_ENABLED", default="false", cast=lambda v: v.lower() in ("true", "1", "yes"))
+COMPOUND_PERCENT: int = _env("COMPOUND_PERCENT", default="50", cast=int)
 
 API_ENABLED: bool = _env("API_ENABLED", default="false", cast=lambda v: v.lower() in ("true", "1", "yes"))
 API_PORT: int = _env("API_PORT", default="8080", cast=int)
