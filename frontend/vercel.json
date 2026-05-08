@@ -1,6 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
+  "functions": {
+    "api/proxy.js": {
+      "memory": 256,
+      "maxDuration": 10
+    }
+  },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/proxy" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
