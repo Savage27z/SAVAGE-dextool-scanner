@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
+import { API_URL } from '../api/client';
 
 const BOT_NAME = import.meta.env.VITE_TELEGRAM_BOT_NAME || 'your_bot_name';
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function TelegramLogin() {
   const containerRef = useRef<HTMLDivElement>(null);
