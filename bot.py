@@ -155,6 +155,28 @@ def _generate_solana_wallet() -> tuple[Keypair, str]:
     return kp, seed_phrase
 
 
+async def _broadcast_lowcap_alert(token: dict):
+    alert_msg = (
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🔍 <b>NEW LOWCAP DETECTED</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🪙 {token.get('name', '?')} ({token.get('symbol', '?')})\n"
+        f"📄 <code>{token.get('contract_address', '')}</code>\n"
+        f"⛓ {token.get('chain', '')}\n"
+        f"💰 MCap: ${token.get('market_cap', 0):,.0f}\n"
+        f"💧 Liq: ${token.get('liquidity', 0):,.0f}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    tp = token.get("contract_address", "")[:16]
+    alert_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🛒 Quick Buy 0.1 SOL", callback_data=f"quickbuy:{tp}:0.1"),
+            InlineKeyboardButton("🛒 Quick Buy 0.5 SOL", callback_data=f"quickbuy:{tp}:0.5"),
+        ]
+    ])
+    await notifier.broadcast_alert(alert_msg, reply_markup=alert_markup)
+
+
 async def scanner_loop():
     global is_running
     native = NATIVE_SYMBOL.get(CHAIN.upper(), "SOL")
@@ -175,25 +197,7 @@ async def scanner_loop():
                         await db.save_detected_token(token)
 
                         if alerts_enabled:
-                            alert_msg = (
-                                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                "🔍 <b>NEW LOWCAP DETECTED</b>\n"
-                                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                f"🪙 {token.get('name', '?')} ({token.get('symbol', '?')})\n"
-                                f"📄 <code>{token.get('contract_address', '')}</code>\n"
-                                f"⛓ {token.get('chain', '')}\n"
-                                f"💰 MCap: ${token.get('market_cap', 0):,.0f}\n"
-                                f"💧 Liq: ${token.get('liquidity', 0):,.0f}\n"
-                                "━━━━━━━━━━━━━━━━━━━━━━"
-                            )
-                            tp = token.get("contract_address", "")[:16]
-                            alert_markup = InlineKeyboardMarkup([
-                                [
-                                    InlineKeyboardButton("🛒 Quick Buy 0.1 SOL", callback_data=f"quickbuy:{tp}:0.1"),
-                                    InlineKeyboardButton("🛒 Quick Buy 0.5 SOL", callback_data=f"quickbuy:{tp}:0.5"),
-                                ]
-                            ])
-                            await notifier.broadcast_alert(alert_msg, reply_markup=alert_markup)
+                            await _broadcast_lowcap_alert(token)
 
                         trading_users = await db.get_all_trading_users()
                         if not trading_users:
@@ -377,6 +381,7 @@ async def cmd_help(update, context):
         lines.append("/stats — Detailed trading performance analytics")
         lines.append("/pnl [days] — P&amp;L summary (default: today)")
         lines.append("/lowcaps [count] — Show recent detected tokens")
+        lines.append("/scan — Run an immediate scanner pass and report results")
         lines.append("/login &lt;code&gt; — Confirm dashboard login with a code from the web UI")
         lines.append("")
         lines.append("<b>⚙️ Settings:</b>")
@@ -3011,6 +3016,35 @@ async def cmd_alerts(update, context):
         await update.message.reply_html("Usage: <code>/alerts on|off</code>")
 
 
+async def cmd_scan(update, context):
+    """Run an immediate scanner pass and report what happened."""
+    await _register_chat(update)
+    if not _is_admin(update):
+        await update.message.reply_text("Admin only.")
+        return
+
+    await update.message.reply_html(
+        "🔎 <b>Manual Dextool scan started</b>\n"
+        f"Alerts: {'ON' if alerts_enabled else 'OFF'} | Min Score: {MIN_SCORE}"
+    )
+    try:
+        async with aiohttp.ClientSession() as session:
+            tokens = await scan_all_sources(session, CHAIN)
+        for token in tokens:
+            await db.save_detected_token(token)
+            if alerts_enabled:
+                await _broadcast_lowcap_alert(token)
+        await update.message.reply_html(
+            "✅ <b>Manual scan complete</b>\n"
+            f"Qualified lowcaps: {len(tokens)}\n"
+            f"Alerts broadcast: {'yes' if alerts_enabled and tokens else 'no'}\n"
+            "If this returns 0, the scanner is running but current market data did not pass filters."
+        )
+    except Exception as exc:
+        logger.exception("Manual scan failed: %s", exc)
+        await update.message.reply_html(f"❌ Manual scan failed: <code>{str(exc)[:200]}</code>")
+
+
 async def cmd_login(update, context):
     """Verify a dashboard login code sent from the web UI."""
     await _register_chat(update)
@@ -3889,6 +3923,7 @@ def main():
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("alerts", cmd_alerts))
     app.add_handler(CommandHandler("login", cmd_login))
+    app.add_handler(CommandHandler("scan", cmd_scan))
     app.add_handler(CommandHandler("lowcaps", cmd_lowcaps))
     app.add_handler(CommandHandler("backtest", cmd_backtest))
     app.add_handler(CommandHandler("blacklist", cmd_blacklist))

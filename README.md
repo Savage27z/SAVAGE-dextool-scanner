@@ -72,8 +72,8 @@ SAVAGE-dextool-scanner/
 | `FRONTEND_URL` | backend | CORS origin for local frontend | `http://localhost:5173` |
 | `FRONTEND_PORT` | Docker | Published frontend port | `3000` |
 | `BACKEND_PORT` | Docker | Published backend port | `8000` |
-| `FRONTEND_API_URL` | frontend | Browser API base URL | `http://localhost:8000` |
-| `FRONTEND_WS_URL` | frontend | Browser WebSocket URL | `ws://localhost:8000` |
+| `VITE_API_URL` / `FRONTEND_API_URL` | frontend | Browser API base URL; Vercel proxy also reads `FRONTEND_API_URL` or `BACKEND_URL` | `https://your-backend.up.railway.app` |
+| `VITE_WS_URL` / `FRONTEND_WS_URL` | frontend | Browser WebSocket URL | `wss://your-backend.up.railway.app` |
 | `RPC_URL_SOL` | bot/backend | Solana RPC endpoint | `https://api.mainnet-beta.solana.com` |
 | `RPC_URL_ETH` | optional | Ethereum RPC endpoint | Infura/Alchemy URL |
 | `RPC_URL_BSC` | optional | BSC RPC endpoint | public/private RPC |
@@ -119,7 +119,8 @@ SAVAGE-dextool-scanner/
 | `API_ENABLED` | legacy | Legacy root API toggle | `false` |
 | `API_PORT` | legacy | Legacy API port | `8080` |
 | `API_KEY` | legacy | Legacy API key | random string |
-| `ALERT_BROADCAST` | bot | Broadcast detections to all chats | `false` |
+| `ALERT_BROADCAST` | bot | Broadcast detections to all chats | `true` |
+| `AUTO_START_SCANNER` | bot | Start scanner automatically when bot boots | `true` |
 | `SNIPER_ENABLED` | bot | Enable sniper loop | `false` |
 | `SNIPER_CHECK_INTERVAL` | bot | Sniper interval seconds | `10` |
 | `SNIPER_MIN_LIQUIDITY` | bot | Sniper liquidity floor | `1000` |
@@ -192,8 +193,8 @@ SAVAGE-dextool-scanner/
 2. Add PostgreSQL and Redis addons.
 3. Set required variables from `.env.example` in Railway variables.
 4. Ensure `DATABASE_URL` and `REDIS_URL` point to the Railway addon values.
-5. Railway uses `railway.toml`, builds `backend/Dockerfile`, runs `alembic upgrade head`, then starts `uvicorn` on `$PORT`.
-6. Deploy the bot as a separate Railway service using the root `Dockerfile` if you want bot and dashboard to scale independently.
+5. Use `railway.backend.toml` for the dashboard backend service and set `FRONTEND_URL` to the Vercel URL.
+6. Use `railway.toml` for the Telegram bot/scanner service; it runs migrations and starts `bot.py`.
 
 ## User registration and dashboard login
 

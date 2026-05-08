@@ -51,7 +51,7 @@ MIN_MCAP: int = _env("MIN_MCAP", default="10000", cast=int)
 SCAN_INTERVAL: int = _env("SCAN_INTERVAL", default="60", cast=int)
 MONITOR_INTERVAL: int = _env("MONITOR_INTERVAL", default="30", cast=int)
 
-MIN_SCORE: int = _env("MIN_SCORE", default="60", cast=int)
+MIN_SCORE: int = _env("MIN_SCORE", default="40", cast=int)
 
 WHALE_TRACKING_ENABLED: bool = _env("WHALE_TRACKING_ENABLED", default="true", cast=lambda v: v.lower() in ("true", "1", "yes"))
 WHALE_CHECK_INTERVAL: int = _env("WHALE_CHECK_INTERVAL", default="45", cast=int)
