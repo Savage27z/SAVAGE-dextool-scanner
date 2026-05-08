@@ -4245,12 +4245,24 @@ async def cmd_diag(update, context):
     except Exception as exc:
         lines.append(f"❌ <b>Telegram error:</b> {str(exc)[:120]}")
 
-    fe = os.getenv("FRONTEND_URL", "").rstrip("/")
+    def _normalize_url(raw: str) -> tuple[str, bool]:
+        """Strip trailing slash and ensure https:// is present. Returns (url, had_to_add_protocol)."""
+        s = (raw or "").strip().rstrip("/")
+        if not s:
+            return "", False
+        if s.startswith("http://") or s.startswith("https://"):
+            return s, False
+        return f"https://{s}", True
+
+    fe_raw = os.getenv("FRONTEND_URL", "")
+    fe, fe_fixed = _normalize_url(fe_raw)
     if fe:
-        lines.append(f"<b>Frontend URL:</b> <code>{fe}</code>")
+        suffix = " <i>(env missing https://)</i>" if fe_fixed else ""
+        lines.append(f"<b>Frontend URL:</b> <code>{fe}</code>{suffix}")
 
     # --- Backend reachability (optional) ---
-    backend_url = os.getenv("BACKEND_URL", "").rstrip("/") or fe
+    backend_raw = os.getenv("BACKEND_URL", "")
+    backend_url, _ = _normalize_url(backend_raw) if backend_raw else (fe, False)
     if backend_url:
         try:
             import httpx
