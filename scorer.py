@@ -136,7 +136,12 @@ def score_token(token: dict) -> dict:
 
     # --- 6. Tax Level (10 pts) ---
     total_tax = buy_tax + sell_tax
-    if total_tax == 0 and token.get("checked", False):
+    # Sell tax > 15% is a near-certain rug — actively penalize
+    if sell_tax >= 20:
+        tax_score = -10
+    elif sell_tax >= 15:
+        tax_score = -5
+    elif total_tax == 0 and token.get("checked", False):
         tax_score = 10
     elif total_tax == 0:
         tax_score = 4
@@ -179,18 +184,20 @@ def score_token(token: dict) -> dict:
     breakdown["socials"] = social_score
 
     # --- 9. Price Momentum (5 pts) ---
-    if 5 <= price_change <= 50:
-        momentum_score = 5
-    elif 0 <= price_change <= 5:
-        momentum_score = 3
-    elif 50 < price_change <= 100:
-        momentum_score = 2
-    elif price_change > 100:
-        momentum_score = 0
-    elif -20 <= price_change < 0:
-        momentum_score = 2
+    if 5 <= price_change <= 30:
+        momentum_score = 5  # healthy uptrend
+    elif 0 <= price_change < 5:
+        momentum_score = 3  # flat / mild
+    elif 30 < price_change <= 80:
+        momentum_score = 2  # already moved — risky entry
+    elif 80 < price_change <= 200:
+        momentum_score = 0  # too pumped
+    elif price_change > 200:
+        momentum_score = -5  # very likely top — actively penalize
+    elif -15 <= price_change < 0:
+        momentum_score = 2  # mild dip, fine
     else:
-        momentum_score = 0
+        momentum_score = 0  # heavy bleed
     breakdown["momentum"] = momentum_score
 
     total_score = sum(breakdown.values())

@@ -160,6 +160,21 @@ def _extract_address(raw) -> str | None:
     return None
 
 
+async def _fetch_ds_txns_24h(session: aiohttp.ClientSession, chain: str, address: str) -> dict:
+    """Best-effort DexScreener txns_24h fetch; never raises."""
+    try:
+        from dexscreener import _fetch_token_pairs as _ds_pairs, _safe_float as _ds_f, _safe_int as _ds_i
+        ds_chain = {"SOL": "solana", "ETH": "ethereum", "BSC": "bsc"}.get(chain.upper(), "solana")
+        pairs = await _ds_pairs(session, ds_chain, address)
+        if not pairs:
+            return {"buys": 0, "sells": 0}
+        best = max(pairs, key=lambda p: _ds_f((p.get("liquidity") or {}).get("usd")))
+        txns_h24 = ((best.get("txns") or {}).get("h24") or {})
+        return {"buys": _ds_i(txns_h24.get("buys")), "sells": _ds_i(txns_h24.get("sells"))}
+    except Exception:
+        return {"buys": 0, "sells": 0}
+
+
 async def _enrich_token(session: aiohttp.ClientSession, chain_id: str, address: str, chain: str) -> dict | None:
     details, price_data, audit, pools = await asyncio.gather(
         _fetch_token_details(session, chain_id, address),
@@ -281,6 +296,8 @@ async def _enrich_token(session: aiohttp.ClientSession, chain_id: str, address: 
 
     dextools_url = dex_pair_url or f"https://www.dextools.io/app/en/{chain_id}/pair-explorer/{address}"
 
+    txns_24h = await _fetch_ds_txns_24h(session, chain, address)
+
     return {
         "name": name,
         "symbol": symbol,
@@ -293,6 +310,7 @@ async def _enrich_token(session: aiohttp.ClientSession, chain_id: str, address: 
         "price_native": price_native,
         "volume_24h": volume_24h,
         "price_change_24h": variation_24h,
+        "txns_24h": txns_24h,
         "holders": holders,
         "buy_tax": buy_tax,
         "sell_tax": sell_tax,

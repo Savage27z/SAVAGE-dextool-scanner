@@ -16,6 +16,24 @@ async def lifespan(app: FastAPI):
     await redis_pool.connect(REDIS_URL)
     if redis_pool.client:
         await ws_manager.start_redis_listener()
+    try:
+        from .database import engine
+        from sqlalchemy import text
+        if engine is not None:
+            async with engine.begin() as conn:
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS dashboard_login_codes (
+                        code VARCHAR(10) PRIMARY KEY,
+                        user_id BIGINT,
+                        username VARCHAR(255),
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        expires_at TIMESTAMPTZ NOT NULL,
+                        claimed_at TIMESTAMPTZ,
+                        consumed_at TIMESTAMPTZ
+                    )
+                """))
+    except Exception as exc:
+        logger.warning('Failed to ensure dashboard_login_codes table at backend startup: %s', exc)
     logger.info('Lifespan startup complete – ready to serve')
     yield
     await ws_manager.stop_redis_listener()

@@ -17,6 +17,18 @@ REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 _pool: asyncpg.Pool | None = None
 _redis_client = None
 
+_LOGIN_CODE_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS dashboard_login_codes (
+    code VARCHAR(10) PRIMARY KEY,
+    user_id BIGINT,
+    username VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    claimed_at TIMESTAMPTZ,
+    consumed_at TIMESTAMPTZ
+)
+"""
+
 
 def _convert_sql(sql: str) -> str:
     sql = sql.replace('INSERT OR IGNORE', 'INSERT')
@@ -60,6 +72,10 @@ async def init_db():
     global _pool
     if _pool is None:
         _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=20)
+    try:
+        await _pool.execute(_LOGIN_CODE_TABLE_DDL)
+    except Exception as exc:
+        logger.warning('Failed to ensure dashboard_login_codes table at startup: %s', exc)
     logger.info('PostgreSQL pool initialised')
 
 
@@ -572,19 +588,6 @@ async def activate_kill_switch(user_id: int):
 
 async def deactivate_kill_switch(user_id: int):
     await _execute('INSERT INTO daily_loss_records (user_id, date, total_loss, kill_switch_active) VALUES (?, ?, 0, FALSE) ON CONFLICT (user_id, date) DO UPDATE SET kill_switch_active = FALSE', user_id, date.today().isoformat())
-
-
-_LOGIN_CODE_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS dashboard_login_codes (
-    code VARCHAR(10) PRIMARY KEY,
-    user_id BIGINT,
-    username VARCHAR(255),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    expires_at TIMESTAMPTZ NOT NULL,
-    claimed_at TIMESTAMPTZ,
-    consumed_at TIMESTAMPTZ
-)
-"""
 
 
 async def ensure_login_code_table():

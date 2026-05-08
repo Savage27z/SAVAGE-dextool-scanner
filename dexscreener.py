@@ -186,6 +186,7 @@ async def _enrich_from_dexscreener(
         "price_native": price_native,
         "volume_24h": volume_24h,
         "price_change_24h": price_change_24h,
+        "txns_24h": {"buys": _safe_int(txns_24h.get("buys")), "sells": _safe_int(txns_24h.get("sells"))},
         "holders": 0,
         "buy_tax": hp_result["buy_tax"] if hp_result["checked"] else 0.0,
         "sell_tax": hp_result["sell_tax"] if hp_result["checked"] else 0.0,

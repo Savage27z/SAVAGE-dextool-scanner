@@ -409,6 +409,7 @@ async def cmd_help(update, context):
         lines.append("/pnl [days] — P&amp;L summary (default: today)")
         lines.append("/lowcaps [count] — Show recent detected tokens")
         lines.append("/login &lt;code&gt; — Confirm dashboard login with a code from the web UI")
+        lines.append("/dashboard — Open the SAVAGE dashboard")
         lines.append("")
         lines.append("<b>⚙️ Settings:</b>")
         lines.append("/mysettings — View/edit your personal trading settings")
@@ -522,6 +523,7 @@ async def cmd_start(update, context):
                 await update.message.reply_text("Empty login code — generate a new one on the dashboard.")
                 return
             result = await db.claim_login_code(code, user_id, username)
+            logger.info("Dashboard deeplink claim: code=%s user_id=%d result=%s", code, user_id, result)
             if result == 'ok':
                 await update.message.reply_html(
                     "✅ <b>Dashboard login confirmed.</b>\n"
@@ -4100,6 +4102,25 @@ async def cmd_orders(update, context):
     await update.message.reply_html("\n".join(lines))
 
 
+async def cmd_dashboard(update, context):
+    """Reply with the configured dashboard URL."""
+    await _register_chat(update)
+    if await _reject_unauthorized(update):
+        return
+    import os
+    fe = os.getenv("FRONTEND_URL", "").rstrip("/")
+    if not fe:
+        await update.message.reply_text("FRONTEND_URL is not configured.")
+        return
+    keyboard = [[InlineKeyboardButton("🌐 Open dashboard", url=f"{fe}/login")]]
+    await update.message.reply_html(
+        f"🌐 <b>SAVAGE dashboard:</b>\n<code>{fe}/login</code>\n\n"
+        "On the login page, tap <i>Get Login Code</i>, then tap the\n"
+        "‘Open in Telegram’ button — you’ll be logged in automatically.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
 async def cmd_diag(update, context):
     await _register_chat(update)
     if not _is_admin(update):
@@ -4112,21 +4133,68 @@ async def cmd_diag(update, context):
 
     lines = ["🩺 <b>SAVAGE Diagnostics</b>\n"]
 
-    try:
-        db_url = os.getenv("DATABASE_URL", "")
-        if db_url:
-            parsed = urlparse(db_url)
-            db_host_safe = f"{parsed.hostname}:{parsed.port}/{(parsed.path or '/').lstrip('/')}"
-        else:
-            db_host_safe = "(unset)"
-        users = await db.get_all_trading_users()
-        wallet_count = await db._fetchval('SELECT COUNT(*) FROM user_wallets')
-        login_codes = await db._fetchval('SELECT COUNT(*) FROM dashboard_login_codes')
-        lines.append(f"✅ <b>DB:</b> {db_host_safe}")
-        lines.append(f"   wallets={wallet_count} | trading={len(users)} | login_codes={login_codes}")
-    except Exception as exc:
-        lines.append(f"❌ <b>DB error:</b> {str(exc)[:120]}")
+    # --- DB: identity, host, table existence (split so one failure doesn't hide the rest) ---
+    db_url = os.getenv("DATABASE_URL", "")
+    if db_url:
+        parsed = urlparse(db_url)
+        db_host_safe = f"{parsed.hostname}:{parsed.port}/{(parsed.path or '/').lstrip('/')}"
+    else:
+        db_host_safe = "(unset)"
+    lines.append(f"<b>DB host:</b> <code>{db_host_safe}</code>")
 
+    try:
+        await db.ensure_login_code_table()
+    except Exception as exc:
+        lines.append(f"⚠️ Could not ensure dashboard_login_codes table: {str(exc)[:120]}")
+
+    db_ok = False
+    try:
+        ident = await db._fetchrow(
+            "SELECT current_database() AS dbname, "
+            "COALESCE(host(inet_server_addr())::text, 'local') AS srv_host, "
+            "current_setting('server_version') AS srv_version"
+        )
+        if ident:
+            lines.append(
+                f"✅ <b>DB:</b> {ident.get('dbname')} on {ident.get('srv_host')} (pg {ident.get('srv_version','?')})"
+            )
+            db_ok = True
+    except Exception as exc:
+        lines.append(f"❌ <b>DB connect error:</b> {str(exc)[:160]}")
+
+    if db_ok:
+        try:
+            wallet_count = await db._fetchval("SELECT COUNT(*) FROM user_wallets") or 0
+        except Exception as exc:
+            wallet_count = f"err({str(exc)[:40]})"
+        try:
+            users = await db.get_all_trading_users()
+            trading_count = len(users)
+        except Exception as exc:
+            trading_count = f"err({str(exc)[:40]})"
+        try:
+            login_codes = await db._fetchval("SELECT COUNT(*) FROM dashboard_login_codes") or 0
+        except Exception as exc:
+            login_codes = f"err({str(exc)[:40]})"
+        try:
+            recent = await db._fetchrow(
+                "SELECT MAX(created_at) AS last_created, "
+                "COUNT(*) FILTER (WHERE claimed_at IS NOT NULL) AS claimed, "
+                "COUNT(*) FILTER (WHERE consumed_at IS NOT NULL) AS consumed "
+                "FROM dashboard_login_codes"
+            )
+            last_created = recent.get("last_created") if recent else None
+            claimed = recent.get("claimed", 0) if recent else 0
+            consumed = recent.get("consumed", 0) if recent else 0
+        except Exception:
+            last_created, claimed, consumed = None, 0, 0
+        lines.append(f"   wallets={wallet_count} | trading={trading_count} | login_codes={login_codes}")
+        if last_created:
+            lines.append(
+                f"   last code: <code>{last_created}</code> | claimed={claimed} | consumed={consumed}"
+            )
+
+    # --- Redis ---
     try:
         import redis.asyncio as _r
         url = os.getenv("REDIS_URL", "")
@@ -4143,13 +4211,14 @@ async def cmd_diag(update, context):
     except Exception as exc:
         lines.append(f"❌ <b>Redis error:</b> {str(exc)[:120]}")
 
+    # --- Solana RPC ---
     try:
         from config import RPC_URLS_SOL, _mask_rpc_url
         rpc_count = len(RPC_URLS_SOL)
         first_rpc = RPC_URLS_SOL[0] if RPC_URLS_SOL else ""
         masked = _mask_rpc_url(first_rpc)
         t0 = _t.monotonic()
-        if hasattr(trader, 'try_get_balance'):
+        if hasattr(trader, "try_get_balance"):
             bal, err = await trader.try_get_balance()
         else:
             try:
@@ -4167,11 +4236,34 @@ async def cmd_diag(update, context):
     except Exception as exc:
         lines.append(f"❌ <b>Solana RPC error:</b> {str(exc)[:120]}")
 
+    # --- Telegram bot identity + dashboard URL config ---
     try:
         me = await context.bot.get_me()
-        lines.append(f"✅ <b>Telegram:</b> @{me.username} (id={me.id})")
+        bot_username_env = os.getenv("TELEGRAM_BOT_NAME", "").lstrip("@")
+        match_note = "" if (not bot_username_env or bot_username_env == me.username) else f" ⚠️ TELEGRAM_BOT_NAME=@{bot_username_env} mismatch!"
+        lines.append(f"✅ <b>Telegram:</b> @{me.username} (id={me.id}){match_note}")
     except Exception as exc:
         lines.append(f"❌ <b>Telegram error:</b> {str(exc)[:120]}")
+
+    fe = os.getenv("FRONTEND_URL", "").rstrip("/")
+    if fe:
+        lines.append(f"<b>Frontend URL:</b> <code>{fe}</code>")
+
+    # --- Backend reachability (optional) ---
+    backend_url = os.getenv("BACKEND_URL", "").rstrip("/") or fe
+    if backend_url:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5) as client:
+                t0 = _t.monotonic()
+                resp = await client.get(f"{backend_url}/api/health")
+                ms = int((_t.monotonic() - t0) * 1000)
+                if resp.status_code == 200:
+                    lines.append(f"✅ <b>Backend /api/health:</b> {ms}ms")
+                else:
+                    lines.append(f"⚠️ <b>Backend /api/health:</b> HTTP {resp.status_code}")
+        except Exception as exc:
+            lines.append(f"❌ <b>Backend reach error:</b> {str(exc)[:120]}")
 
     lines.append(f"\n🔁 Scanner: {'🟢 running' if is_running else '🔴 stopped'} | Alerts: {'on' if alerts_enabled else 'off'}")
     lines.append(f"⛓ Chain: {CHAIN} | Min liq: ${MIN_LIQUIDITY:,} | MCap: ${MIN_MCAP:,}–${MAX_MCAP:,}")
@@ -4231,6 +4323,7 @@ def main():
     app.add_handler(CommandHandler("pnl", cmd_pnl))
     app.add_handler(CommandHandler("compound", cmd_compound))
     app.add_handler(CommandHandler("diag", cmd_diag))
+    app.add_handler(CommandHandler("dashboard", cmd_dashboard))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     def _handle_signal(signum, frame):
